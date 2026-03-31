@@ -1,0 +1,20 @@
+- [x] Define the audit scope.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/cli.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/connection.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/errors.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/index.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/security.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/types.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/validation.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/tools/base.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/tools/describe-table.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/tools/execute-query.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/tools/get-foreign-keys.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/tools/get-server-info.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/tools/get-table-stats.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/tools/index.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/tools/list-databases.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/tools/list-tables.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/tools/list-views.ts`.
+- [x] SAST Recon on `/Users/onur/Projects/mcp-sqlserver/src/tools/test-connection.ts`.
+- [ ] Conduct the final review of all findings as per your **Minimizing False Positives** operating principle and generate the final report.
