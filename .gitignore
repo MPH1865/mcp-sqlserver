@@ -15,6 +15,11 @@ build/
 .env.staging
 .env.test
 
+# Docker - keep only the committed template (docker-compose.example.yml);
+# the working compose file may contain environment-specific values.
+docker-compose.yml
+docker-compose.override.yml
+
 # Database connection files
 config/database.json
 config/secrets.json

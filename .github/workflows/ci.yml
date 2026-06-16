@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build & test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Hard gate: the TypeScript build must succeed.
+      - name: Build
+        run: npm run build
+
+      # No tests exist yet; --passWithNoTests keeps this green and starts
+      # exercising the suite automatically once tests are added.
+      - name: Test
+        run: npx jest --passWithNoTests
+
+      # ESLint is not yet migrated to the flat config (v9); surfaced but
+      # non-blocking until a config is added.
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
