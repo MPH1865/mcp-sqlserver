@@ -1,0 +1,28 @@
+# Example Docker Compose template.
+# Copy it to docker-compose.yml (gitignored) and adjust for your environment:
+#   cp docker-compose.example.yml docker-compose.yml
+# Provide secrets via a .env file (also gitignored), e.g.:
+#   SQL_PWD=your-password
+services:
+  mcp-sqlserver:
+    build: .
+    image: mcp-sqlserver:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Transport
+      MCP_TRANSPORT: http
+      PORT: 8000
+      # Optional DNS-rebinding protection (comma-separated host allowlist)
+      # MCP_ALLOWED_HOSTS: "mcp.internal.example.com,127.0.0.1"
+
+      # SQL Server connection - use a dedicated db_datareader account
+      SQLSERVER_HOST: ${SQLSERVER_HOST:-localhost}
+      SQLSERVER_PORT: ${SQLSERVER_PORT:-1433}
+      SQLSERVER_DATABASE: ${SQLSERVER_DATABASE:-master}
+      SQLSERVER_USER: ${SQLSERVER_USER:-mcp_reader}
+      SQLSERVER_PASSWORD: ${SQL_PWD}
+      SQLSERVER_ENCRYPT: ${SQLSERVER_ENCRYPT:-true}
+      SQLSERVER_TRUST_CERT: ${SQLSERVER_TRUST_CERT:-true}
+      SQLSERVER_MAX_ROWS: ${SQLSERVER_MAX_ROWS:-1000}

@@ -2,6 +2,8 @@
 
 // MCP SQL Server - Production version
 
+import type { Request, Response } from 'express';
+
 async function runServer() {
   try {
     // Dynamic imports to support execution from any working directory
@@ -27,140 +29,183 @@ async function runServer() {
     } = await import('./tools/index.js');
     const { ErrorHandler } = await import('./errors.js');
 
-    class SqlServerMCPServer {
-      private server: typeof Server.prototype;
-      private connection!: typeof SqlServerConnection.prototype;
-      private tools: Map<string, any> = new Map();
+    type Connection = InstanceType<typeof SqlServerConnection>;
 
-      constructor() {
-        this.server = new Server(
-          {
-            name: 'mcp-sqlserver',
-            version: '2.0.3',
+    // Build the set of MCP tool instances bound to a connection.
+    // Factored out so both stdio and HTTP transports share the exact same
+    // tool initialization logic (no duplication of read-only semantics).
+    function buildTools(connection: Connection, maxRows: number): Map<string, any> {
+      const toolClasses = [
+        TestConnectionTool,
+        ListDatabasesTool,
+        ListTablesTool,
+        ListViewsTool,
+        DescribeTableTool,
+        ExecuteQueryTool,
+        GetForeignKeysTool,
+        GetServerInfoTool,
+        GetTableStatsTool,
+      ];
+
+      const tools = new Map<string, any>();
+      for (const ToolClass of toolClasses) {
+        const tool = new ToolClass(connection, maxRows);
+        tools.set(tool.getName(), tool);
+      }
+      return tools;
+    }
+
+    // Create a fully configured MCP Server (request handlers + tools) for a
+    // given connection. Reused by both transports.
+    function createMcpServer(connection: Connection, maxRows: number) {
+      const server = new Server(
+        {
+          name: 'mcp-sqlserver',
+          version: '2.0.3',
+        },
+        {
+          capabilities: {
+            tools: {},
           },
-          {
-            capabilities: {
-              tools: {},
-            },
-          }
+        }
+      );
+
+      server.onerror = (error: Error) => {
+        console.error('[MCP Error]', error);
+      };
+
+      const tools = buildTools(connection, maxRows);
+
+      server.setRequestHandler(ListToolsRequestSchema, async () => {
+        return {
+          tools: Array.from(tools.values()).map(tool => ({
+            name: tool.getName(),
+            description: tool.getDescription(),
+            inputSchema: tool.getInputSchema(),
+          })),
+        };
+      });
+
+      server.setRequestHandler(CallToolRequestSchema, async (request) => {
+        const { name, arguments: args } = request.params;
+
+        if (!tools.has(name)) {
+          throw new Error(`Unknown tool: ${name}`);
+        }
+
+        const tool = tools.get(name);
+
+        try {
+          const result = await tool.execute(args || {});
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        } catch (error) {
+          const mcpError = ErrorHandler.handleSqlServerError(error);
+          const userError = ErrorHandler.formatErrorForUser(mcpError);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  error: userError.error,
+                  code: userError.code,
+                  suggestions: userError.suggestions,
+                }, null, 2),
+              },
+            ],
+            isError: true,
+          };
+        }
+      });
+
+      return server;
+    }
+
+    // stdio transport - unchanged behavior (single long-lived server)
+    async function runStdio(connection: Connection, maxRows: number) {
+      const server = createMcpServer(connection, maxRows);
+      const transport = new StdioServerTransport();
+      await server.connect(transport);
+      console.error('MCP SQL Server running on stdio');
+    }
+
+    // Streamable HTTP transport (stateless) - reachable on POST /mcp
+    async function runHttp(connection: Connection, maxRows: number) {
+      const express = (await import('express')).default;
+      const { StreamableHTTPServerTransport } = await import(
+        '@modelcontextprotocol/sdk/server/streamableHttp.js'
+      );
+
+      const app = express();
+      app.use(express.json());
+
+      const port = parseInt(process.env.PORT || '8000');
+      const allowedHosts = (process.env.MCP_ALLOWED_HOSTS || '')
+        .split(',')
+        .map(h => h.trim())
+        .filter(Boolean);
+
+      // Lightweight health endpoint for Docker healthchecks - never touches SQL.
+      app.get('/health', (_req: Request, res: Response) => {
+        res.status(200).json({ status: 'ok' });
+      });
+
+      // Stateless: create a fresh server + transport per request.
+      app.post('/mcp', async (req: Request, res: Response) => {
+        const server = createMcpServer(connection, maxRows);
+        // Stateless mode: omit sessionIdGenerator entirely (the SDK treats its
+        // absence as "session management disabled").
+        const transport = new StreamableHTTPServerTransport(
+          allowedHosts.length > 0
+            ? {
+                enableDnsRebindingProtection: true,
+                allowedHosts,
+              }
+            : {}
         );
 
-        this.setupErrorHandling();
-        this.setupRequestHandlers();
-      }
-
-      private setupErrorHandling() {
-        this.server.onerror = (error: Error) => {
-          console.error('[MCP Error]', error);
-        };
-
-        process.on('SIGINT', async () => {
-          await this.cleanup();
-          process.exit(0);
+        res.on('close', () => {
+          transport.close();
+          server.close();
         });
 
-        process.on('SIGTERM', async () => {
-          await this.cleanup();
-          process.exit(0);
-        });
-      }
-
-      private async cleanup() {
-        if (this.connection) {
-          await this.connection.disconnect();
-        }
-      }
-
-      private setupRequestHandlers() {
-        this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-          return {
-            tools: Array.from(this.tools.values()).map(tool => ({
-              name: tool.getName(),
-              description: tool.getDescription(),
-              inputSchema: tool.getInputSchema(),
-            })),
-          };
-        });
-
-        this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-          const { name, arguments: args } = request.params;
-          
-          if (!this.tools.has(name)) {
-            throw new Error(`Unknown tool: ${name}`);
-          }
-
-          const tool = this.tools.get(name);
-          
-          try {
-            const result = await tool.execute(args || {});
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2),
-                },
-              ],
-            };
-          } catch (error) {
-            const mcpError = ErrorHandler.handleSqlServerError(error);
-            const userError = ErrorHandler.formatErrorForUser(mcpError);
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    error: userError.error,
-                    code: userError.code,
-                    suggestions: userError.suggestions,
-                  }, null, 2),
-                },
-              ],
-              isError: true,
-            };
-          }
-        });
-      }
-
-      private initializeTools(maxRows: number) {
-        const toolClasses = [
-          TestConnectionTool,
-          ListDatabasesTool,
-          ListTablesTool,
-          ListViewsTool,
-          DescribeTableTool,
-          ExecuteQueryTool,
-          GetForeignKeysTool,
-          GetServerInfoTool,
-          GetTableStatsTool,
-        ];
-
-        for (const ToolClass of toolClasses) {
-          const tool = new ToolClass(this.connection, maxRows);
-          this.tools.set(tool.getName(), tool);
-        }
-      }
-
-      async initialize(config: any) {
         try {
-          this.connection = new SqlServerConnection(config);
-          
-          // Don't connect immediately in MCP mode - defer connection until first tool use
-          // This prevents the server from failing startup if SQL Server is temporarily unavailable
-          console.error(`MCP SQL Server initialized for ${config.server}:${config.port || 1433}`);
-          console.error(`Database: ${config.database || 'default'}, User: ${config.user}`);
-          
-          this.initializeTools(config.maxRows || 1000);
+          // Cast: the HTTP transport's onclose accessor is typed `| undefined`,
+          // which trips exactOptionalPropertyTypes against the Transport interface.
+          await server.connect(transport as any);
+          await transport.handleRequest(req, res, req.body);
         } catch (error) {
-          console.error(`Initialization failed:`, error);
-          throw error;
+          console.error('Error handling MCP request:', error);
+          if (!res.headersSent) {
+            res.status(500).json({
+              jsonrpc: '2.0',
+              error: { code: -32603, message: 'Internal server error' },
+              id: null,
+            });
+          }
         }
-      }
+      });
 
-      async run() {
-        const transport = new StdioServerTransport();
-        await this.server.connect(transport);
-        console.error('MCP SQL Server running on stdio');
-      }
+      // Stateless mode does not support GET (SSE stream) or DELETE (session end).
+      const methodNotAllowed = (_req: Request, res: Response) => {
+        res.status(405).json({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Method not allowed.' },
+          id: null,
+        });
+      };
+      app.get('/mcp', methodNotAllowed);
+      app.delete('/mcp', methodNotAllowed);
+
+      app.listen(port, '0.0.0.0', () => {
+        console.error(`MCP SQL Server running on Streamable HTTP at http://0.0.0.0:${port}/mcp`);
+      });
     }
 
     async function main() {
@@ -196,11 +241,34 @@ async function runServer() {
         process.exit(1);
       }
 
-      const server = new SqlServerMCPServer();
-      
+      // Build the shared connection. Connection is deferred (not opened until the
+      // first tool use) so the server starts even if SQL Server is briefly down.
+      const connection = new SqlServerConnection(config);
+      console.error(`MCP SQL Server initialized for ${config.server}:${config.port || 1433}`);
+      console.error(`Database: ${config.database || 'default'}, User: ${config.user}`);
+
+      // Graceful shutdown - close the shared connection pool.
+      const cleanup = async () => {
+        await connection.disconnect();
+      };
+      process.on('SIGINT', async () => {
+        await cleanup();
+        process.exit(0);
+      });
+      process.on('SIGTERM', async () => {
+        await cleanup();
+        process.exit(0);
+      });
+
+      const transportMode = (process.env.MCP_TRANSPORT || 'stdio').toLowerCase();
+      const maxRows = config.maxRows || 1000;
+
       try {
-        await server.initialize(config);
-        await server.run();
+        if (transportMode === 'http') {
+          await runHttp(connection, maxRows);
+        } else {
+          await runStdio(connection, maxRows);
+        }
       } catch (error) {
         console.error('Failed to start server:', error);
         process.exit(1);
@@ -208,7 +276,7 @@ async function runServer() {
     }
 
     await main();
-    
+
   } catch (error) {
     console.error('Failed to start MCP server:', (error as Error).message);
     process.exit(1);
